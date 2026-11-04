@@ -40,6 +40,16 @@ The app shows a full WACC breakdown, with every input and where it came from.
 
 A sensitivity table shows how much the answer moves when these change.
 
+## Expectations tracker
+
+The bottom of the page shows how expectations have changed over the last 3 years. For every trading day, the app recalculates the implied FCF growth using that day's share price and **only the annual accounts that were public by then**. Each year's accounts are assumed to be published 60 days after the year ends. This avoids **look-ahead bias**: using information nobody had yet, which would make past expectations look better-informed than they were.
+
+The discount rate stays fixed at today's WACC (or your override), so the line only moves because of the share price and newly published results.
+
+- **Chart:** implied growth over time, with earnings dates as vertical lines, and the share price in a second chart below.
+- **Expectations shocks:** the biggest changes in implied growth over the 5 trading days around each earnings date.
+- **Earnings dates** come from Yahoo Finance. If they're missing or out of date (Yahoo's stop in 2017 for Unilever), add them in the app. They're saved in `earnings_dates.json`.
+
 ## How to run it
 
 You need Python 3 installed.
@@ -65,6 +75,7 @@ You can also run the parts without the web page:
 - `python wacc.py` prints the WACC breakdown for Unilever, Apple and Tesla.
 - `python reverse_dcf.py` prints the full workings.
 - `python business_terms.py` prints the revenue and margin view, including the grid.
+- `python tracker.py AAPL` prints the expectations tracker for a ticker.
 
 ## Files
 
@@ -74,6 +85,8 @@ You can also run the parts without the web page:
 | `data.py` | Downloads the data and converts currencies |
 | `wacc.py` | Works out each company's discount rate (WACC). Editable assumptions are at the top |
 | `reverse_dcf.py` | The DCF maths and the solver that finds the implied growth |
+| `tracker.py` | The expectations tracker: day-by-day implied growth and expectations shocks |
+| `earnings_dates.json` | Earnings dates you've added in the app (created when you first save) |
 | `business_terms.py` | Turns implied growth into revenue growth and FCF margin, including the grid |
 | `requirements.txt` | The list of Python packages needed |
 
@@ -90,6 +103,7 @@ You can also run the parts without the web page:
 - **Historical revenue growth can be distorted** by companies buying or selling businesses. If revenue jumps or falls sharply in one year, the app warns you and measures growth only from that year onwards. For example, Unilever's figures appear to exclude ice cream from 2023.
 - **Data quality depends on Yahoo Finance.** For example, Yahoo's earnings dates for Unilever stop in 2017.
 - **The verdict is a rule of thumb.** "In line" means within 2 percentage points of past growth. Small changes to the sliders can flip it.
-- **Planned, not built yet:** tracking how implied growth changes around earnings announcements.
+- **The tracker's "60 days after year end" rule is an approximation.** Many companies publish sooner (Unilever usually reports in early February), so new accounts can come into the tracker a few weeks late. The new accounts also usually arrive on a different day from the earnings announcement, so most shocks around earnings dates come from the share price moving.
+- **The tracker only uses annual accounts**, not quarterly results. Early in the period the FCF average covers fewer years, because Yahoo only has about 4 years of accounts.
 
 This is a learning project, not investment advice.

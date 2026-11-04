@@ -28,12 +28,14 @@
 
 ## Files
 - `data.py`: fetches price, shares, free cash flow, debt, cash and earnings dates; converts everything to the trading currency (pence -> pounds, accounts -> trading currency at today's FX rate); computes enterprise value.
+- `tracker.py`: expectations tracker. Daily implied growth over 3 years using only annual reports public by that day (year end + 60 days), latest report's debt/cash/shares (shares split-adjusted to match Yahoo's split-adjusted prices), up to 4-year FCF average, daily FX. WACC fixed at today's value/override. Shocks = change over 5 trading days around each earnings date. User-added dates in `earnings_dates.json` (env var PRICED_IN_EARNINGS_FILE overrides the path, used for testing).
 - `business_terms.py`: revenue × FCF-margin view. Margin today = avg FCF ÷ latest revenue (consistent with the main DCF); margin moves linearly to year 10. Solves revenue growth at constant margin, year-10 margin at historical revenue growth, and a growth × margin grid (value ÷ EV). Measures historical growth after any >10% fall / >30% jump in revenue.
 - `wacc.py`: per-company WACC (CAPM cost of equity with Blume-adjusted beta; cost of debt = risk-free + synthetic-rating spread from EBIT/interest coverage, Damodaran Jan 2026 table, after tax; interest-paid/debt shown as comparison only; market-value weights) with sanity checks and fallbacks; editable assumptions at the top (ERP 5%, GBP risk-free default).
 - `reverse_dcf.py`: 10-year DCF + terminal value; solves (scipy `brentq`) for the growth rate that makes DCF value = enterprise value; uses WACC by default (flat 9% kept for comparison); prints workings, sensitivity table and a plain-English summary.
 
 ## Known data quirks
-- Yahoo's earnings dates for ULVR.L stop at 2017 (Apple's are up to date).
+- Yahoo's earnings dates for ULVR.L stop at 2017 (Apple's are up to date): the user adds them in the app.
+- ULVR.L did an 8-for-9 share consolidation on 9 Dec 2025 (ice cream demerger); Yahoo's past prices are adjusted for it.
 - Yahoo usually gives only 4 years of annual cash flow.
 - Yahoo has no non-US government bond yields; GBP risk-free is a hand-typed default in `wacc.py` (update it periodically).
 - AAPL's latest interest expense is blank on Yahoo; cost of debt falls back to the newest year with data.

@@ -8,6 +8,7 @@ Start it with:
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 from data import get_company_data
 from reverse_dcf import (
@@ -22,6 +23,17 @@ from reverse_dcf import (
     verdict,
 )
 from business_terms import analyse, summary_text
+from tracker import (
+    LOOKBACK_YEARS,
+    REPORT_LAG_DAYS,
+    build_tracker,
+    dates_in_period,
+    expectation_shocks,
+    load_history,
+    load_saved_dates,
+    report_switch_dates,
+    save_dates,
+)
 from wacc import EQUITY_RISK_PREMIUM, calculate_wacc, get_risk_free_rate
 
 BILLIONS = 1_000_000_000
@@ -34,6 +46,12 @@ RED, NEUTRAL, INK = "#e34948", "#f0efec", "#0b0b0b"
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_data(ticker):
     return get_company_data(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_tracker(ticker, discount_rate, terminal_growth):
+    history = load_history(ticker)
+    return history, build_tracker(history, discount_rate, terminal_growth)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -392,3 +410,117 @@ st.dataframe(sens)
 # ---------------------------------------------------------------------------
 if data["missing_fcf_years"]:
     st.caption(f"Note: Yahoo had no cash flow data for {data['missing_fcf_years']}.")
+
+# ---------------------------------------------------------------------------
+# 12. Expectations tracker
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Expectations tracker")
+st.caption(
+    f"For every trading day over the last {LOOKBACK_YEARS} years: the FCF growth priced in "
+    "by that day's share price. The discount rate stays fixed at "
+    f"{discount_rate:.2%} (today's {'override' if override else 'WACC'}), so the line only "
+    "moves because of the share price and newly published results."
+)
+st.markdown(
+    "**Look-ahead bias** means using information that wasn't public yet on a given "
+    "day, like annual results before they were published, which makes the past look "
+    f"better-informed than it was; to avoid it, each year's accounts are only used from "
+    f"{REPORT_LAG_DAYS} days after the year ends."
+)
+
+with st.spinner("Recalculating implied growth for every trading day..."):
+    try:
+        history, track = load_tracker(ticker, discount_rate, terminal_growth)
+    except Exception:
+        history, track = None, pd.DataFrame()
+
+if track.empty or track["implied_growth"].isna().all():
+    st.info("Not enough price history or published accounts to build the tracker.")
+    st.stop()
+
+# --- Earnings dates: Yahoo's, plus any the user has added ---------------------
+yahoo_dates = dates_in_period(history["yahoo_dates"], track)
+saved_dates = load_saved_dates(ticker)
+last_day = track.index[-1].date()
+out_of_date = not yahoo_dates or (last_day - yahoo_dates[-1]).days > 200
+if out_of_date:
+    st.info(f"Yahoo's earnings dates for {ticker} are missing or out of date"
+            + (f" (the latest is {yahoo_dates[-1]})" if yahoo_dates else "")
+            + ". Add them below: they're on the company's investor relations website.")
+
+with st.expander(f"Add or edit earnings dates for {ticker} ({len(saved_dates)} saved)",
+                 expanded=out_of_date):
+    st.caption("One date per row. Use + to add a row; select a row and press Delete "
+               "to remove it. Click Save when you're done. Saved in earnings_dates.json.")
+    edited = st.data_editor(
+        pd.DataFrame({"Earnings date": pd.to_datetime(pd.Series(saved_dates, dtype="object"))}),
+        num_rows="dynamic", hide_index=True, key=f"dates_{ticker}",
+        column_config={"Earnings date": st.column_config.DateColumn(format="YYYY-MM-DD")},
+    )
+    if st.button("Save dates", key=f"save_dates_{ticker}"):
+        save_dates(ticker, list(edited["Earnings date"].dropna()))
+        st.success("Saved.")
+        st.rerun()
+    if yahoo_dates:
+        st.caption("From Yahoo (always included): "
+                   + ", ".join(d.isoformat() for d in yahoo_dates))
+
+earnings_dates = dates_in_period(yahoo_dates + saved_dates, track)
+switches = report_switch_dates(track)
+
+# --- Charts: implied growth on top, share price below ---------------------------
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                    row_heights=[0.6, 0.4],
+                    subplot_titles=("Implied FCF growth (% a year, next 10 years)",
+                                    f"Share price ({cur})"))
+fig.add_scatter(x=track.index, y=track["implied_growth"] * 100, mode="lines",
+                line=dict(color=BLUE, width=2), name="Implied growth",
+                hovertemplate="%{x|%d %b %Y}: %{y:.2f}%<extra></extra>", row=1, col=1)
+fig.add_scatter(x=track.index, y=track["price"], mode="lines",
+                line=dict(color=ORANGE, width=2), name="Share price",
+                hovertemplate="%{x|%d %b %Y}: %{y:,.2f} " + cur + "<extra></extra>",
+                row=2, col=1)
+for d in earnings_dates:
+    fig.add_vline(x=pd.Timestamp(d), line=dict(color="#52514e", width=1, dash="dash"),
+                  row="all", col=1)
+for d in switches:
+    fig.add_vline(x=d, line=dict(color="#1baf7a", width=1.5, dash="dot"), row="all", col=1)
+# Legend entries for the vertical lines.
+fig.add_scatter(x=[None], y=[None], mode="lines", name="Earnings date",
+                line=dict(color="#52514e", width=1, dash="dash"), row=1, col=1)
+fig.add_scatter(x=[None], y=[None], mode="lines", name="New annual accounts start being used",
+                line=dict(color="#1baf7a", width=1.5, dash="dot"), row=1, col=1)
+fig.update_layout(height=560, hovermode="x unified", margin=dict(t=40, b=20, l=10, r=10),
+                  legend=dict(orientation="h", y=-0.08, x=0))
+fig.update_yaxes(ticksuffix="%", row=1, col=1)
+st.plotly_chart(fig, width="stretch")
+
+g = track["implied_growth"]
+st.caption(
+    f"From {g.iloc[0]:.1%} on {track.index[0]:%d %b %Y} to {g.iloc[-1]:.1%} today "
+    f"(low {g.min():.1%} on {g.idxmin():%d %b %Y}, high {g.max():.1%} on "
+    f"{g.idxmax():%d %b %Y}). Today's value can differ slightly from the top of the page, "
+    "because the tracker uses the share count from the latest annual report rather than "
+    "Yahoo's live figure. Early on, the FCF average uses fewer years "
+    f"({int(track['years_in_average'].iloc[0])} at the start)."
+)
+
+# --- Expectations shocks --------------------------------------------------------
+st.markdown("**Expectations shocks**")
+st.caption("The change in implied growth over the 5 trading days around each earnings "
+           "date (2 days before to 2 days after), biggest first. A big rise means the "
+           "market started expecting more growth; a big fall means less.")
+shocks = expectation_shocks(track, earnings_dates)
+if shocks.empty:
+    st.info("No earnings dates in the tracked period yet, so there are no shocks to show. "
+            "Add dates above.")
+else:
+    st.dataframe(
+        shocks.style.format({
+            "Earnings date": lambda d: d.isoformat(),
+            "Implied growth before": "{:.2%}", "Implied growth after": "{:.2%}",
+            "Change (points)": "{:+.2f}", "Share price change": "{:+.1%}",
+        }),
+        hide_index=True, width="stretch",
+    )
