@@ -21,10 +21,12 @@ from reverse_dcf import (
     short_name,
     verdict,
 )
+from business_terms import analyse, summary_text
 from wacc import EQUITY_RISK_PREMIUM, calculate_wacc, get_risk_free_rate
 
 BILLIONS = 1_000_000_000
 BLUE, ORANGE = "#2a78d6", "#eb6834"
+RED, NEUTRAL, INK = "#e34948", "#f0efec", "#0b0b0b"
 
 
 # Remember downloaded data for an hour, so moving a slider doesn't
@@ -177,6 +179,10 @@ elif outcome.startswith("PESSIMISTIC"):
 else:
     st.success(summary, icon="⚖️")
 
+business = analyse(data, discount_rate, terminal_growth)
+if business is not None:
+    st.markdown("**In business terms:** " + summary_text(short_name(data["name"]), business))
+
 flat_growth = implied_growth(start_fcf, enterprise_value, FLAT_DISCOUNT_RATE, terminal_growth)
 rate_label = "your discount rate" if override else "the WACC"
 if flat_growth is not None and abs(discount_rate - FLAT_DISCOUNT_RATE) > 1e-9:
@@ -207,7 +213,9 @@ if data["fx_rate"] != 1.0:
 # ---------------------------------------------------------------------------
 st.subheader("Discount rate (WACC)")
 st.caption("The return investors and lenders want, averaged by how much of each "
-           "the company uses. Future cash is discounted at this rate.")
+           "the company uses. Future cash is discounted at this rate. A higher "
+           "discount rate makes future cash worth less today, so MORE growth is "
+           "needed to justify the price; a lower rate means less growth is needed.")
 g1, g2, g3 = st.columns(3)
 g1.metric("Beta (adjusted)", f"{wacc['beta']:.2f}",
           help=f"Raw beta from Yahoo: {wacc['raw_beta']:.2f}. Adjusted = ⅔ × raw + ⅓ × 1.0, "
@@ -236,7 +244,94 @@ for warning in wacc["warnings"]:
 st.dataframe(pd.DataFrame(wacc["table"]), hide_index=True, width="stretch")
 
 # ---------------------------------------------------------------------------
-# 8. Chart of projected cash flows
+# 8. In business terms: revenue growth and FCF margin
+# ---------------------------------------------------------------------------
+if business is not None:
+    st.subheader("What would it take? Sales growth and margins")
+    st.caption("Free cash flow = revenue × FCF margin (the share of each sale that ends "
+               "up as free cash). The same cash flow growth can come from faster sales, "
+               "higher margins, or a mix.")
+    hg = business["hist_growth"]
+    hist_from, hist_to = business["hist_years"]
+    k1, k2, k3 = st.columns(3)
+    k1.metric(f"Revenue ({business['revenue_year']})", money(business["revenue0"], cur))
+    k2.metric("FCF margin today", f"{business['margin0']:.1%}",
+              help=f"Average free cash flow ({years_used} years) ÷ latest revenue: the same "
+                   "starting cash as the main calculation."
+                   + (f" The latest single year was {business['latest_margin']:.1%}."
+                      if business["latest_margin"] is not None else ""))
+    k3.metric(f"Revenue growth {hist_from}-{hist_to}",
+              f"{hg:.1%}" if hg is not None else "n/a")
+    n1, n2 = st.columns(2)
+    ng, nm = business["needed_growth"], business["needed_margin"]
+    n1.metric("① Revenue growth needed at today's margin",
+              f"{ng:.1%} a year" if ng is not None else "n/a")
+    if nm is None:
+        nm_text = "n/a"
+    elif nm > 1:
+        nm_text = "over 100% (impossible)"
+    else:
+        nm_text = f"{nm:.1%}"
+    n2.metric("② Year-10 margin needed at historical sales growth", nm_text)
+    for warning in business["warnings"]:
+        st.warning(warning, icon="⚠️")
+
+    # ③ The grid: which combinations justify today's price?
+    grid = business["grid"]
+    xs = [g * 100 for g in grid.columns]
+    ys = [m * 100 for m in grid.index]
+    worth = grid.values
+    marks = [["✓" if v >= 1 else "" for v in row] for row in worth]
+    heat = go.Figure()
+    heat.add_heatmap(
+        x=xs, y=ys, z=worth.clip(0, 2), zmin=0, zmax=2, zmid=1,
+        colorscale=[[0, RED], [0.5, NEUTRAL], [1, BLUE]],
+        text=marks, texttemplate="%{text}", textfont=dict(size=11),
+        customdata=worth, xgap=2, ygap=2,
+        hovertemplate=("Revenue growth %{x:.0f}% a year<br>Year-10 margin %{y:.1f}%<br>"
+                       "Worth %{customdata:.0%} of today's price<extra></extra>"),
+        colorbar=dict(title=dict(text="Worth vs<br>today's price", side="top"),
+                      len=0.8, y=0.42, tickformat=".0%",
+                      tickvals=[0, 0.5, 1, 1.5, 2],
+                      ticktext=["0%", "50%", "100%", "150%", "200%+"]),
+    )
+    # Break-even line: the margin needed at each growth rate.
+    top = ys[-1] + (ys[1] - ys[0]) / 2
+    line = [(g * 100, m * 100) for g, m in zip(business["growths"], business["breakeven"])
+            if m is not None and 0 <= m * 100 <= top]
+    if line:
+        heat.add_scatter(x=[p[0] for p in line], y=[p[1] for p in line], mode="lines",
+                         line=dict(color=INK, width=2, dash="dot"),
+                         name="Break-even (justifies today's price)",
+                         hovertemplate="Break-even: %{y:.1f}% margin at %{x:.0f}% growth<extra></extra>")
+    # The company's track record: historical growth at today's margin.
+    if hg is not None:
+        shown_x = min(max(hg * 100, xs[0]), xs[-1])
+        heat.add_scatter(x=[shown_x], y=[business["margin0"] * 100], mode="markers",
+                         marker=dict(symbol="diamond", size=14, color=ORANGE,
+                                     line=dict(color="white", width=2)),
+                         name="Track record (historical growth, today's margin)",
+                         hovertemplate=(f"Track record: {hg:.1%} growth, "
+                                        f"{business['margin0']:.1%} margin<extra></extra>"))
+    heat.update_layout(
+        xaxis=dict(title="Revenue growth a year, next 10 years (%)", dtick=1),
+        yaxis=dict(title="FCF margin in year 10 (%)"),
+        legend=dict(orientation="h", y=-0.25, x=0),
+        margin=dict(t=20, b=40, l=10, r=10), height=460,
+    )
+    st.plotly_chart(heat, width="stretch")
+    note = ("✓ and blue = this mix of sales growth and year-10 margin would justify "
+            "today's price; red = it wouldn't. The margin moves steadily from today's "
+            "level to the year-10 level.")
+    if hg is not None and not xs[0] <= hg * 100 <= xs[-1]:
+        note += (f" The track record ({hg:.1%} growth) is outside the grid, so "
+                 "its marker is pinned to the edge.")
+    if business["margin0"] * 100 > top:
+        note += " Today's margin is above the top of the grid."
+    st.caption(note)
+
+# ---------------------------------------------------------------------------
+# 9. Chart of projected cash flows
 # ---------------------------------------------------------------------------
 st.subheader("Projected free cash flow")
 table = projection_table(start_fcf, growth, discount_rate, terminal_growth)
@@ -280,7 +375,7 @@ with st.expander("Show the year-by-year numbers"):
     }))
 
 # ---------------------------------------------------------------------------
-# 9. Sensitivity table
+# 10. Sensitivity table
 # ---------------------------------------------------------------------------
 st.subheader("How sensitive is the answer?")
 st.caption("Implied growth if the discount rate or terminal growth were a little "
@@ -293,7 +388,7 @@ sens = sensitivity_table(
 st.dataframe(sens)
 
 # ---------------------------------------------------------------------------
-# 10. Data notes
+# 11. Data notes
 # ---------------------------------------------------------------------------
 if data["missing_fcf_years"]:
     st.caption(f"Note: Yahoo had no cash flow data for {data['missing_fcf_years']}.")

@@ -158,6 +158,9 @@ def get_company_data(ticker):
     interest_by_year = row_by_year(income, "Interest Expense")
     tax_by_year = row_by_year(income, "Tax Provision")
     pretax_by_year = row_by_year(income, "Pretax Income")
+    # Revenue (sales), converted into the trading currency, oldest year first.
+    revenue_by_year = (row_by_year(income, "Total Revenue") * fx_rate).sort_index()
+
     # EBIT = profit before interest and tax. Fall back to operating income.
     ebit_by_year = row_by_year(income, "EBIT")
     if ebit_by_year.empty:
@@ -192,6 +195,7 @@ def get_company_data(ticker):
         "tax_by_year": tax_by_year,
         "pretax_by_year": pretax_by_year,
         "ebit_by_year": ebit_by_year,
+        "revenue_by_year": revenue_by_year,
         "fcf_table": fcf_table,
         "missing_fcf_years": missing_years,
         "latest_fcf": latest_fcf,

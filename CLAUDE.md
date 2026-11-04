@@ -28,6 +28,7 @@
 
 ## Files
 - `data.py`: fetches price, shares, free cash flow, debt, cash and earnings dates; converts everything to the trading currency (pence -> pounds, accounts -> trading currency at today's FX rate); computes enterprise value.
+- `business_terms.py`: revenue × FCF-margin view. Margin today = avg FCF ÷ latest revenue (consistent with the main DCF); margin moves linearly to year 10. Solves revenue growth at constant margin, year-10 margin at historical revenue growth, and a growth × margin grid (value ÷ EV). Measures historical growth after any >10% fall / >30% jump in revenue.
 - `wacc.py`: per-company WACC (CAPM cost of equity with Blume-adjusted beta; cost of debt = risk-free + synthetic-rating spread from EBIT/interest coverage, Damodaran Jan 2026 table, after tax; interest-paid/debt shown as comparison only; market-value weights) with sanity checks and fallbacks; editable assumptions at the top (ERP 5%, GBP risk-free default).
 - `reverse_dcf.py`: 10-year DCF + terminal value; solves (scipy `brentq`) for the growth rate that makes DCF value = enterprise value; uses WACC by default (flat 9% kept for comparison); prints workings, sensitivity table and a plain-English summary.
 
