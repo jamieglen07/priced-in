@@ -1,0 +1,19 @@
+# The project's private toolbox - big, and anyone can rebuild it from requirements.txt
+.venv/
+
+# Files Python creates automatically while running
+__pycache__/
+*.pyc
+
+# Mac system files
+.DS_Store
+
+# Private settings, passwords and secret keys - never upload these
+.env
+.env.*
+.streamlit/secrets.toml
+*.key
+*.pem
+
+# Log files
+*.log
