@@ -209,9 +209,23 @@ st.subheader("Discount rate (WACC)")
 st.caption("The return investors and lenders want, averaged by how much of each "
            "the company uses. Future cash is discounted at this rate.")
 g1, g2, g3 = st.columns(3)
-g1.metric("Cost of equity", f"{wacc['cost_of_equity']:.2%}")
-g2.metric("Cost of debt (after tax)", f"{wacc['after_tax_cost_of_debt']:.2%}")
-g3.metric("WACC", f"{wacc['wacc']:.2%}")
+g1.metric("Beta (adjusted)", f"{wacc['beta']:.2f}",
+          help=f"Raw beta from Yahoo: {wacc['raw_beta']:.2f}. Adjusted = ⅔ × raw + ⅓ × 1.0, "
+               "because betas tend to drift towards 1.0 over time.")
+g2.metric("Credit rating (estimated)", wacc["rating"],
+          help="Based on interest coverage (EBIT ÷ interest expense): how many times "
+               "over profit could pay the interest bill.")
+g3.metric("Credit spread", f"{wacc['spread']:.2%}")
+h1, h2, h3 = st.columns(3)
+h1.metric("Cost of equity", f"{wacc['cost_of_equity']:.2%}")
+h2.metric("Cost of debt (after tax)", f"{wacc['after_tax_cost_of_debt']:.2%}")
+h3.metric("WACC", f"{wacc['wacc']:.2%}")
+if wacc["interest_paid_rate"] is not None and data["total_debt"] > 0:
+    st.caption(f"Cost of debt before tax is {wacc['pre_tax_cost_of_debt']:.2%} "
+               f"(today's borrowing rate: risk-free + {wacc['spread']:.2%} spread). "
+               f"For comparison, the interest it actually paid works out at "
+               f"{wacc['interest_paid_rate']:.2%} of its debt, which reflects older, "
+               "lower rates.")
 
 if override:
     st.info(f"You've overridden the WACC: using **{discount_rate:.2%}** instead of "

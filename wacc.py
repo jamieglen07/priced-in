@@ -29,13 +29,36 @@ RISK_FREE_DEFAULTS = {
 }
 OTHER_CURRENCY_RISK_FREE = 0.045  # rough guess for any currency not listed
 
+# Credit spreads: the extra interest a company pays above the risk-free rate,
+# based on its interest coverage ratio (EBIT ÷ interest expense).
+# Each row: (coverage at least this, rating, spread).
+# Source: Damodaran's synthetic rating table for large non-financial
+# companies, data as of January 2026:
+# https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ratings.html
+CREDIT_SPREAD_TABLE = [
+    (8.50, "AAA", 0.0040),
+    (6.50, "AA", 0.0055),
+    (5.50, "A+", 0.0070),
+    (4.25, "A", 0.0078),
+    (3.00, "A-", 0.0089),
+    (2.50, "BBB", 0.0111),
+    (2.25, "BB+", 0.0138),
+    (2.00, "BB", 0.0184),
+    (1.75, "B+", 0.0275),
+    (1.50, "B", 0.0321),
+    (1.25, "B-", 0.0509),
+    (0.80, "CCC", 0.0885),
+    (0.65, "CC", 0.1261),
+    (0.20, "C", 0.1600),
+    (float("-inf"), "D", 0.1900),
+]
+DEFAULT_RATING = "BBB"   # used when coverage can't be worked out
+
 # Fallbacks used when a company's own data is missing or looks wrong.
 DEFAULT_BETA = 1.0         # 1.0 = exactly as risky as the stock market overall
 MAX_BETA = 3.0
 DEFAULT_TAX_RATE = 0.25    # a typical corporate tax rate
 MAX_TAX_RATE = 0.40
-DEBT_SPREAD = 0.015        # companies usually borrow at ~1.5% above the risk-free rate
-COST_OF_DEBT_RANGE = (0.01, 0.15)   # outside 1-15% we assume the data is wrong
 WACC_WARNING_RANGE = (0.05, 0.15)   # outside this, show a "check this" note
 
 # ===========================================================================
@@ -52,6 +75,26 @@ def get_risk_free_rate(currency):
         return RISK_FREE_DEFAULTS[currency]
     return (OTHER_CURRENCY_RISK_FREE,
             f"No {currency} bond yield available - rough default (edit in wacc.py)")
+
+
+def adjust_beta(raw_beta):
+    """
+    Blume adjustment: pull the beta a third of the way towards 1.0.
+    Over time, most companies' betas drift towards the market average,
+    so this gives a better guess of future risk than the raw number.
+    """
+    return (2 / 3) * raw_beta + (1 / 3) * 1.0
+
+
+def rating_from_coverage(coverage):
+    """Look up (rating, spread) for an interest coverage ratio."""
+    for minimum, rating, spread in CREDIT_SPREAD_TABLE:
+        if coverage >= minimum:
+            return rating, spread
+
+
+def spread_for_rating(rating):
+    return next(spread for _, r, spread in CREDIT_SPREAD_TABLE if r == rating)
 
 
 def pct(x):
@@ -76,60 +119,64 @@ def calculate_wacc(data, risk_free, risk_free_source,
 
     # --- Cost of equity (CAPM) --------------------------------------------
     # The return shareholders want = safe rate + (how risky x extra for risk).
-    beta = data.get("beta")
-    beta_source = "Yahoo Finance (how much the share moves vs. the market)"
-    if beta is None:
+    raw_beta = data.get("beta")
+    raw_source = "Yahoo Finance (how much the share moved vs. the market)"
+    if raw_beta is None:
         warnings.append(f"Beta is missing, so a default of {DEFAULT_BETA} was used.")
-        beta, beta_source = DEFAULT_BETA, "Default - Yahoo had no beta"
-    elif beta <= 0:
-        warnings.append(f"Beta of {beta:.2f} is zero or negative, which isn't realistic "
+        raw_beta, raw_source = DEFAULT_BETA, "Default - Yahoo had no beta"
+    elif raw_beta <= 0:
+        warnings.append(f"Beta of {raw_beta:.2f} is zero or negative, which isn't realistic "
                         f"for a normal company - used {DEFAULT_BETA} instead.")
-        beta, beta_source = DEFAULT_BETA, f"Default - Yahoo's beta ({data['beta']:.2f}) was ≤ 0"
-    elif beta > MAX_BETA:
-        warnings.append(f"Beta of {beta:.2f} is above {MAX_BETA}, which is extreme - "
+        raw_beta, raw_source = DEFAULT_BETA, f"Default - Yahoo's beta ({data['beta']:.2f}) was ≤ 0"
+    elif raw_beta > MAX_BETA:
+        warnings.append(f"Beta of {raw_beta:.2f} is above {MAX_BETA}, which is extreme - "
                         f"used {DEFAULT_BETA} instead.")
-        beta, beta_source = DEFAULT_BETA, f"Default - Yahoo's beta ({data['beta']:.2f}) was > {MAX_BETA}"
+        raw_beta, raw_source = DEFAULT_BETA, f"Default - Yahoo's beta ({data['beta']:.2f}) was > {MAX_BETA}"
 
+    beta = adjust_beta(raw_beta)
     cost_of_equity = risk_free + beta * equity_risk_premium
 
     add("Risk-free rate", pct(risk_free), risk_free_source)
-    add("Beta", f"{beta:.2f}", beta_source)
+    add("Beta (raw)", f"{raw_beta:.2f}", raw_source)
+    add("Beta (adjusted)", f"{beta:.2f}", "Blume adjustment: ⅔ × raw beta + ⅓ × 1.0")
     add("Equity risk premium", pct(equity_risk_premium), "Assumption (editable)")
-    add("Cost of equity", pct(cost_of_equity), "Risk-free + beta × equity risk premium")
+    add("Cost of equity", pct(cost_of_equity), "Risk-free + adjusted beta × equity risk premium")
 
-    # --- Cost of debt -------------------------------------------------------
-    # Interest paid ÷ amount borrowed, using the newest year that has both.
-    interest, debt = data["interest_by_year"], data["debt_by_year"]
-    years_with_both = [y for y in interest.index if y in debt.index and debt[y] > 0]
+    # --- Cost of debt: what the company would pay to borrow TODAY ----------
+    # Interest coverage = EBIT ÷ interest: how many times over the company's
+    # profit could pay its interest bill. Higher = safer = cheaper borrowing.
+    ebit, interest, debt = data["ebit_by_year"], data["interest_by_year"], data["debt_by_year"]
+    has_debt = data["total_debt"] > 0
 
-    pre_tax_cost_of_debt = None
-    if years_with_both:
-        year = years_with_both[0]
-        pre_tax_cost_of_debt = abs(interest[year]) / debt[year]
-        debt_source = f"Interest expense ÷ total debt ({year} accounts)"
-        low, high = COST_OF_DEBT_RANGE
-        if not low <= pre_tax_cost_of_debt <= high:
-            warnings.append(f"Cost of debt worked out at {pct(pre_tax_cost_of_debt)}, "
-                            f"outside the realistic {low:.0%}-{high:.0%} range - used "
-                            f"risk-free + {DEBT_SPREAD:.1%} instead.")
-            pre_tax_cost_of_debt = None
-        elif year != max(interest.index.max(), debt.index.max()):
-            warnings.append(f"Latest interest expense is missing, so the cost of debt "
+    coverage_years = [y for y in interest.index
+                      if y in ebit.index and abs(interest[y]) > 0]
+    coverage = None
+    if coverage_years:
+        year = coverage_years[0]
+        coverage = ebit[year] / abs(interest[year])
+        rating, spread = rating_from_coverage(coverage)
+        coverage_text = f"{coverage:.1f}x"
+        coverage_source = f"EBIT ÷ interest expense ({year} accounts)"
+        rating_source = "Damodaran synthetic rating table (Jan 2026)"
+        latest_year = max(ebit.index.max(), interest.index.max())
+        if has_debt and year != latest_year:
+            warnings.append(f"Latest interest expense is missing, so the coverage ratio "
                             f"uses {year} figures.")
+    else:
+        rating, spread = DEFAULT_RATING, spread_for_rating(DEFAULT_RATING)
+        coverage_text = "n/a"
+        coverage_source = "No EBIT or interest data"
+        rating_source = f"Default - assumed {DEFAULT_RATING}"
+        if has_debt:
+            warnings.append(f"Couldn't work out interest coverage, so a {DEFAULT_RATING} "
+                            f"rating ({pct(spread)} spread) was assumed.")
 
-    if pre_tax_cost_of_debt is None:
-        pre_tax_cost_of_debt = risk_free + DEBT_SPREAD
-        debt_source = f"Default - risk-free + {DEBT_SPREAD:.1%}"
-        if data["total_debt"] <= 0:
-            debt_source = "Not used - the company has no debt"
-        elif not years_with_both:
-            warnings.append("No interest expense data, so the cost of debt was "
-                            f"estimated as risk-free + {DEBT_SPREAD:.1%}.")
-    elif pre_tax_cost_of_debt < risk_free:
-        warnings.append(f"Cost of debt ({pct(pre_tax_cost_of_debt)}) is below today's "
-                        f"risk-free rate ({pct(risk_free)}). That usually means the debt "
-                        "was borrowed when interest rates were lower - new borrowing "
-                        "would cost more.")
+    if coverage is not None and coverage < 1.25 and has_debt:
+        warnings.append(f"Interest coverage is only {coverage:.1f}x (profit barely covers, "
+                        f"or doesn't cover, the interest bill), so the company is rated "
+                        f"{rating} and borrowing is expensive.")
+
+    pre_tax_cost_of_debt = risk_free + spread
 
     # Interest reduces a company's tax bill, so debt is cheaper after tax.
     tax, pretax = data["tax_by_year"], data["pretax_by_year"]
@@ -151,9 +198,29 @@ def calculate_wacc(data, risk_free, risk_free_source,
 
     after_tax_cost_of_debt = pre_tax_cost_of_debt * (1 - tax_rate)
 
-    add("Cost of debt (before tax)", pct(pre_tax_cost_of_debt), debt_source)
+    add("Interest coverage", coverage_text, coverage_source)
+    add("Implied credit rating", rating, rating_source)
+    add("Credit spread", pct(spread), f"Spread for a {rating} rating")
+    add("Cost of debt (before tax)", pct(pre_tax_cost_of_debt), "Risk-free + credit spread")
     add("Tax rate", pct(tax_rate), tax_source)
     add("Cost of debt (after tax)", pct(after_tax_cost_of_debt), "Cost of debt × (1 − tax rate)")
+
+    # Comparison only: the old method (interest actually paid ÷ debt).
+    # This reflects rates from when the money was borrowed, not today's.
+    paid_years = [y for y in interest.index if y in debt.index and debt[y] > 0]
+    interest_paid_rate = None
+    if paid_years:
+        year = paid_years[0]
+        interest_paid_rate = abs(interest[year]) / debt[year]
+        add("For comparison: interest paid ÷ debt", pct(interest_paid_rate),
+            f"Old method, {year} accounts (not used in WACC)")
+
+    if not has_debt:
+        rows = [r for r in rows if not r["Item"].startswith(("Interest coverage", "Implied",
+                                                             "Credit spread", "For comparison"))]
+        for r in rows:
+            if r["Item"].startswith("Cost of debt"):
+                r["Where it came from"] += " - not used, the company has no debt"
 
     # --- Weights --------------------------------------------------------------
     equity, total_debt = data["market_value"], data["total_debt"]
@@ -177,8 +244,15 @@ def calculate_wacc(data, risk_free, risk_free_source,
 
     return {
         "wacc": wacc,
+        "raw_beta": raw_beta,
+        "beta": beta,
         "cost_of_equity": cost_of_equity,
+        "coverage": coverage,
+        "rating": rating,
+        "spread": spread,
+        "pre_tax_cost_of_debt": pre_tax_cost_of_debt,
         "after_tax_cost_of_debt": after_tax_cost_of_debt,
+        "interest_paid_rate": interest_paid_rate,
         "table": rows,
         "warnings": warnings,
     }

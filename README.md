@@ -19,8 +19,8 @@ Example (November 2026, default settings):
 3. **Work out the price of the whole business** (enterprise value): market value of the shares + debt − cash.
 4. **Measure the cash the business makes.** Free cash flow = cash from operations − spending on things like factories. The app uses the average of the available years.
 5. **Work out the discount rate (WACC).** This is the yearly return the company's shareholders and lenders want, averaged by how much of each it uses:
-   - *Shareholders* (cost of equity, using CAPM) want the government bond yield + beta × an equity risk premium (5%). Beta measures how much the share moves compared with the market, so riskier shares get a higher rate.
-   - *Lenders* (cost of debt) charge the company's interest expense ÷ its debt, reduced for tax because interest lowers the tax bill.
+   - *Shareholders* (cost of equity, using CAPM) want the government bond yield + beta × an equity risk premium (5%). Beta measures how much the share moves compared with the market, so riskier shares get a higher rate. The app uses an **adjusted beta** (⅔ × raw beta + ⅓ × 1.0), because betas tend to drift towards 1.0 over time.
+   - *Lenders* (cost of debt): what the company would pay to borrow **today**, which is the bond yield plus a credit spread. The spread comes from the company's **interest coverage** (profit before interest and tax ÷ interest expense): the more times over it can pay its interest, the safer it is and the lower the spread. The lookup table is [Damodaran's synthetic rating table](https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ratings.html) (January 2026), running from 0.40% for AAA to 19% for D. The result is reduced for tax, because interest lowers the tax bill. The interest the company actually paid is shown for comparison.
    - If any input is missing or looks unrealistic (e.g. a beta above 3), a sensible default is used and the app shows a warning.
 6. **Value future cash.** It grows that cash flow for 10 years, then assumes slow steady growth forever. Each future amount is "discounted" at the WACC, because £1 in ten years is worth less than £1 today.
 7. **Solve backwards.** It tries growth rates until the total value of future cash equals the enterprise value. That growth rate is what's "priced in".
@@ -76,8 +76,8 @@ You can also run the parts without the web page:
 - **No answer for companies with negative free cash flow.** Growing a negative number can't justify a positive price, so the app shows a warning instead.
 - **Simple model.** One growth rate for 10 years, one discount rate for every year, and no adjustment for things like share buybacks, long-term investments or one-off events.
 - **Risk-free rates outside the US are typed in by hand.** The UK gilt yield in `wacc.py` (5.3%, October 2026) needs updating as it changes. Other currencies use a rough 4.5% guess.
-- **Cost of debt is backward-looking.** Interest paid ÷ debt reflects rates when the money was borrowed, which can be below today's rates.
-- **The implied growth is very sensitive to the discount rate.** For Unilever, moving from a flat 9% to its 6.8% WACC changes implied growth from about 6.5% to about 1.1%.
+- **The synthetic credit rating only looks at interest coverage.** Companies with little debt (like Tesla) get the top AAA rating even if real rating agencies, which also look at other risks, rate them lower. The spread table should be updated when Damodaran publishes a new one (each January).
+- **The implied growth is very sensitive to the discount rate.** For Unilever, moving from a flat 9% to its 7.7% WACC changes implied growth from about 6.5% to about 3.6%.
 - **Data quality depends on Yahoo Finance.** For example, Yahoo's earnings dates for Unilever stop in 2017.
 - **The verdict is a rule of thumb.** "In line" means within 2 percentage points of past growth. Small changes to the sliders can flip it.
 - **Planned, not built yet:** tracking how implied growth changes around earnings announcements.

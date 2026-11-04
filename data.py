@@ -158,6 +158,10 @@ def get_company_data(ticker):
     interest_by_year = row_by_year(income, "Interest Expense")
     tax_by_year = row_by_year(income, "Tax Provision")
     pretax_by_year = row_by_year(income, "Pretax Income")
+    # EBIT = profit before interest and tax. Fall back to operating income.
+    ebit_by_year = row_by_year(income, "EBIT")
+    if ebit_by_year.empty:
+        ebit_by_year = row_by_year(income, "Operating Income")
     debt_by_year = row_by_year(balance_sheet, "Total Debt")
 
     # --- 7. Past earnings announcement dates ------------------------------
@@ -187,6 +191,7 @@ def get_company_data(ticker):
         "debt_by_year": debt_by_year,
         "tax_by_year": tax_by_year,
         "pretax_by_year": pretax_by_year,
+        "ebit_by_year": ebit_by_year,
         "fcf_table": fcf_table,
         "missing_fcf_years": missing_years,
         "latest_fcf": latest_fcf,
