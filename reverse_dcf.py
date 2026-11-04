@@ -13,8 +13,11 @@ import pandas as pd
 from scipy.optimize import brentq
 
 from data import get_company_data
+from wacc import calculate_wacc, get_risk_free_rate
 
-DEFAULT_DISCOUNT_RATE = 0.09    # 9%: the yearly return investors want
+# The discount rate now comes from each company's WACC (see wacc.py).
+# The old flat 9% is kept only to compare against.
+FLAT_DISCOUNT_RATE = 0.09
 DEFAULT_TERMINAL_GROWTH = 0.025  # 2.5%: growth forever after year 10
 YEARS = 10                       # length of the "fast growth" period
 
@@ -71,7 +74,7 @@ def dcf_value(start_fcf, growth, discount_rate, terminal_growth, years=YEARS):
 
 
 def implied_growth(start_fcf, market_value,
-                   discount_rate=DEFAULT_DISCOUNT_RATE,
+                   discount_rate=FLAT_DISCOUNT_RATE,
                    terminal_growth=DEFAULT_TERMINAL_GROWTH):
     """
     Find the 10-year growth rate at which the DCF value equals the market value.
@@ -101,16 +104,25 @@ def sensitivity_table(start_fcf, market_value,
                       terminal_growths=(0.02, 0.025, 0.03)):
     """Implied growth for each mix of discount rate (rows) and terminal growth (columns)."""
     table = pd.DataFrame(
-        index=[f"{d:.1%} discount" for d in discount_rates],
+        index=[f"{d:.2%} discount" for d in discount_rates],
         columns=[f"{t:.1%} terminal" for t in terminal_growths],
     )
     for d in discount_rates:
         for t in terminal_growths:
-            g = implied_growth(start_fcf, market_value, d, t)
-            table.loc[f"{d:.1%} discount", f"{t:.1%} terminal"] = (
+            # The maths only works if the discount rate is above terminal growth.
+            g = implied_growth(start_fcf, market_value, d, t) if d > t else None
+            table.loc[f"{d:.2%} discount", f"{t:.1%} terminal"] = (
                 f"{g:.2%}" if g is not None else "n/a"
             )
     return table
+
+
+def short_name(full_name):
+    """'Tesla, Inc.' -> 'Tesla', 'Unilever PLC' -> 'Unilever'."""
+    for ending in [", Inc.", " Inc.", " Inc", " PLC", " plc", " Corporation", " Corp.", " Ltd"]:
+        if full_name.endswith(ending):
+            return full_name[: -len(ending)]
+    return full_name
 
 
 def historical_growth(fcf_series):
@@ -142,12 +154,26 @@ def verdict(implied, past):
     return "IN LINE: it expects roughly the growth the company has delivered"
 
 
-def run_reverse_dcf(ticker,
-                    discount_rate=DEFAULT_DISCOUNT_RATE,
+def run_reverse_dcf(ticker, discount_rate=None,
                     terminal_growth=DEFAULT_TERMINAL_GROWTH):
-    """Fetch the data for a ticker, run the reverse DCF and print everything."""
+    """
+    Fetch the data for a ticker, run the reverse DCF and print everything.
+    If no discount rate is given, the company's own WACC is used.
+    """
     data = get_company_data(ticker)
     cur = data["currency"]
+
+    if discount_rate is None:
+        risk_free, risk_free_source = get_risk_free_rate(cur)
+        wacc = calculate_wacc(data, risk_free, risk_free_source)
+        discount_rate = wacc["wacc"]
+        print("=" * 64)
+        print(f"  WACC: {data['name']} ({ticker})")
+        print("=" * 64)
+        print(pd.DataFrame(wacc["table"]).to_string(index=False))
+        for warning in wacc["warnings"]:
+            print("  ⚠️ ", warning)
+        print()
     billions = 1_000_000_000
     start_fcf = data["average_fcf"]
     market_value = data["market_value"]
@@ -192,6 +218,10 @@ def run_reverse_dcf(ticker,
         change = growth - old_growth
         print(f"   (vs {old_growth:.2%} using market value only: "
               f"{change * 100:+.2f} percentage points)")
+    flat_growth = implied_growth(start_fcf, enterprise_value, FLAT_DISCOUNT_RATE, terminal_growth)
+    if flat_growth is not None and discount_rate != FLAT_DISCOUNT_RATE:
+        print(f"   (vs {flat_growth:.2%} with a flat {FLAT_DISCOUNT_RATE:.0%} discount rate: "
+              f"{(growth - flat_growth) * 100:+.2f} percentage points)")
 
     # Show the working at the implied growth rate.
     table = projection_table(start_fcf, growth, discount_rate, terminal_growth)
@@ -211,13 +241,16 @@ def run_reverse_dcf(ticker,
     print(f"\nShare of value from the terminal (after year {YEARS}): {terminal_share:.0%}")
 
     print("\nSensitivity: implied growth under different assumptions")
-    print(sensitivity_table(start_fcf, enterprise_value).to_string())
+    print(sensitivity_table(
+        start_fcf, enterprise_value,
+        discount_rates=(discount_rate - 0.01, discount_rate, discount_rate + 0.01),
+        terminal_growths=(terminal_growth - 0.005, terminal_growth, terminal_growth + 0.005),
+    ).to_string())
 
     # Plain-English summary.
     past = historical_growth(fcf_series)
-    short_name = data["name"].replace(" PLC", "").replace(" Inc.", "")
     print("\nSummary:")
-    print(f"  To justify today's price, {short_name} must grow free cash flow")
+    print(f"  To justify today's price, {short_name(data['name'])} must grow free cash flow")
     print(f"  about {growth:.1%} a year for {YEARS} years.")
     if past is not None:
         print(f"  From {first_year} to {last_year} it grew {past:.1%} a year.")
@@ -228,5 +261,5 @@ def run_reverse_dcf(ticker,
 
 # This part only runs when you run "python reverse_dcf.py" directly.
 if __name__ == "__main__":
-    for ticker in ["ULVR.L", "AAPL"]:
+    for ticker in ["ULVR.L", "AAPL", "TSLA"]:
         run_reverse_dcf(ticker)

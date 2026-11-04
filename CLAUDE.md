@@ -28,11 +28,14 @@
 
 ## Files
 - `data.py`: fetches price, shares, free cash flow, debt, cash and earnings dates; converts everything to the trading currency (pence -> pounds, accounts -> trading currency at today's FX rate); computes enterprise value.
-- `reverse_dcf.py`: 10-year DCF + terminal value; solves (scipy `brentq`) for the growth rate that makes DCF value = enterprise value; prints workings, sensitivity table and a plain-English summary.
+- `wacc.py`: per-company WACC (CAPM cost of equity, interest/debt cost of debt after tax, market-value weights) with sanity checks and fallbacks; editable assumptions at the top (ERP 5%, GBP risk-free default).
+- `reverse_dcf.py`: 10-year DCF + terminal value; solves (scipy `brentq`) for the growth rate that makes DCF value = enterprise value; uses WACC by default (flat 9% kept for comparison); prints workings, sensitivity table and a plain-English summary.
 
 ## Known data quirks
 - Yahoo's earnings dates for ULVR.L stop at 2017 (Apple's are up to date).
 - Yahoo usually gives only 4 years of annual cash flow.
+- Yahoo has no non-US government bond yields; GBP risk-free is a hand-typed default in `wacc.py` (update it periodically).
+- AAPL's latest interest expense is blank on Yahoo; cost of debt falls back to the newest year with data.
 
 ## Status
-- Streamlit web app (`app.py`) working: ticker box, discount + terminal growth sliders, summary, key numbers, chart, sensitivity table. Next idea: track implied growth around earnings dates.
+- Streamlit web app (`app.py`) working: ticker box, sidebar assumptions (terminal growth, ERP, risk-free, WACC override), WACC breakdown, summary, key numbers, chart, sensitivity table. Next idea: track implied growth around earnings dates.

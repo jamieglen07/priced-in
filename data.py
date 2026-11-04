@@ -62,6 +62,18 @@ def latest_value(table, row_names):
     return 0.0
 
 
+def row_by_year(table, row_name):
+    """
+    One row of a financial table as {year: value}, newest year first,
+    with blank years removed. Empty if Yahoo doesn't have that row.
+    """
+    if table is None or table.empty or row_name not in table.index:
+        return pd.Series(dtype=float)
+    row = table.loc[row_name].dropna()
+    row.index = row.index.year
+    return row.sort_index(ascending=False)
+
+
 def get_company_data(ticker):
     """
     Download the key numbers for one stock and return them in a dictionary
@@ -139,7 +151,16 @@ def get_company_data(ticker):
     # the shares, plus taking on its debts, minus the cash you'd get with it.
     enterprise_value = market_value + total_debt - cash
 
-    # --- 6. Past earnings announcement dates ------------------------------
+    # --- 6. Inputs for the discount rate (WACC) ---------------------------
+    # These stay in the accounts' own currency: they're only used to work out
+    # percentages (like interest / debt), where the currency cancels out.
+    income = stock.income_stmt
+    interest_by_year = row_by_year(income, "Interest Expense")
+    tax_by_year = row_by_year(income, "Tax Provision")
+    pretax_by_year = row_by_year(income, "Pretax Income")
+    debt_by_year = row_by_year(balance_sheet, "Total Debt")
+
+    # --- 7. Past earnings announcement dates ------------------------------
     earnings = stock.get_earnings_dates(limit=60)
     past_earnings = []
     if earnings is not None and not earnings.empty:
@@ -161,6 +182,11 @@ def get_company_data(ticker):
         "total_debt": total_debt,
         "cash": cash,
         "enterprise_value": enterprise_value,
+        "beta": info.get("beta"),
+        "interest_by_year": interest_by_year,
+        "debt_by_year": debt_by_year,
+        "tax_by_year": tax_by_year,
+        "pretax_by_year": pretax_by_year,
         "fcf_table": fcf_table,
         "missing_fcf_years": missing_years,
         "latest_fcf": latest_fcf,
