@@ -33,7 +33,7 @@ You need Python 3 installed.
 
 ```bash
 # 1. Download the project
-git clone https://github.com/MEGAFOOTHEAD/priced-in.git
+git clone https://github.com/jamieglen07/priced-in.git
 cd priced-in
 
 # 2. Create a private toolbox for the project and switch it on
